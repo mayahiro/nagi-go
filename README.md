@@ -2,59 +2,40 @@
 
 [日本語](README_ja.md)
 
-`github.com/mayahiro/nagi-go` contains the Go foundations shared by Nagi TUI
-and Nagi CLI
+`github.com/mayahiro/nagi-go` provides independently reusable Text and VT
+foundations for Nagi terminal applications. It deliberately has no package at
+the module root
 
-It deliberately has no package at the module root
+## Requirements
+
+- Go 1.25 or newer
 
 ## Packages
 
 | Package | Responsibility |
 | --- | --- |
-| [`text`](text) | Unicode 17 grapheme segmentation, terminal cell width, wrapping, truncation, and byte/cell positions |
-| [`vt`](vt) | Pure typed VT input decoding and output encoding, terminal capabilities, colors, attributes, and styles |
+| [`text`](text) | Unicode 17 grapheme segmentation, terminal Cell width, wrapping, truncation, and byte/Cell positions |
+| [`vt`](vt) | Pure typed VT input decoding and output encoding, terminal capabilities, Color, Attributes, and Style |
 
-The packages own no application runtime, Surface, Widget, terminal session, or
-CLI command lifecycle
+These packages own no application runtime, Surface, Widget, terminal session,
+or CLI command lifecycle
 
-## Installation after the first release
-
-After v0.1.0 is published, add the shared module once and import only the
-packages an application needs
+## Installation
 
 ```sh
 go get github.com/mayahiro/nagi-go@v0.1.0
 ```
 
-Both packages are released together under the module version
+Import only the packages an application uses
 
 ## Example
 
-```go
-package main
-
-import (
-	"fmt"
-
-	"github.com/mayahiro/nagi-go/text"
-	"github.com/mayahiro/nagi-go/vt"
-)
-
-func main() {
-	width := text.Width("Nagi", text.ModernWidth())
-	style := vt.Style{Foreground: vt.IndexedColor(4), Bold: true}
-	fmt.Println(width, style.Attributes())
-}
-```
-
-## Development
+The [Text and VT example](examples/text-and-vt/README.md) uses both packages in
+one executable program
 
 ```sh
-make check
+go run ./examples/text-and-vt
 ```
-
-Shared fixture tests use `NAGI_FIXTURES` when it names the fixture directory in
-the Nagi coordination repository
 
 ## License
 
