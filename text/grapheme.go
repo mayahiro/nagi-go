@@ -13,20 +13,43 @@ type Grapheme struct {
 	End int
 }
 
+// GraphemeIterator traverses normalized extended grapheme clusters without
+// materializing a result slice
+type GraphemeIterator struct {
+	input string
+	next  int
+}
+
+// IterateGraphemes returns an allocation-free iterator for valid UTF-8 input
+//
+// Invalid UTF-8 runs are normalized once when the iterator is created
+func IterateGraphemes(input string) GraphemeIterator {
+	return GraphemeIterator{input: NormalizeUTF8(input)}
+}
+
+// Next returns the next grapheme and whether one was available
+func (i *GraphemeIterator) Next() (Grapheme, bool) {
+	if i.next == len(i.input) {
+		return Grapheme{}, false
+	}
+	start := i.next
+	end := nextBoundaryFrom(i.input, start)
+	i.next = end
+	return Grapheme{Text: i.input[start:end], Start: start, End: end}, true
+}
+
 // Graphemes returns the Unicode extended grapheme clusters in input
 //
 // Invalid UTF-8 runs are replaced by one U+FFFD before byte ranges are
 // calculated
 func Graphemes(input string) []Grapheme {
-	input = NormalizeUTF8(input)
-	if input == "" {
+	iterator := IterateGraphemes(input)
+	if iterator.input == "" {
 		return nil
 	}
-	graphemes := make([]Grapheme, 0, utf8.RuneCountInString(input))
-	for start := 0; start < len(input); {
-		end := nextBoundaryFrom(input, start)
-		graphemes = append(graphemes, Grapheme{Text: input[start:end], Start: start, End: end})
-		start = end
+	graphemes := make([]Grapheme, 0, utf8.RuneCountInString(iterator.input))
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
+		graphemes = append(graphemes, grapheme)
 	}
 	return graphemes
 }
@@ -34,9 +57,9 @@ func Graphemes(input string) []Grapheme {
 // GraphemeBoundaries returns all extended grapheme cluster boundaries,
 // including zero and the normalized UTF-8 length
 func GraphemeBoundaries(input string) []int {
-	input = NormalizeUTF8(input)
-	boundaries := make([]int, 1, utf8.RuneCountInString(input)+1)
-	for _, grapheme := range Graphemes(input) {
+	iterator := IterateGraphemes(input)
+	boundaries := make([]int, 1, utf8.RuneCountInString(iterator.input)+1)
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
 		boundaries = append(boundaries, grapheme.End)
 	}
 	return boundaries
@@ -45,14 +68,14 @@ func GraphemeBoundaries(input string) []int {
 // IsGraphemeBoundary reports whether byteOffset is an extended grapheme
 // cluster boundary in the normalized input
 func IsGraphemeBoundary(input string, byteOffset int) bool {
-	input = NormalizeUTF8(input)
-	if byteOffset < 0 || byteOffset > len(input) {
+	iterator := IterateGraphemes(input)
+	if byteOffset < 0 || byteOffset > len(iterator.input) {
 		return false
 	}
 	if byteOffset == 0 {
 		return true
 	}
-	for _, grapheme := range Graphemes(input) {
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
 		if grapheme.End == byteOffset {
 			return true
 		}
@@ -66,11 +89,11 @@ func IsGraphemeBoundary(input string, byteOffset int) bool {
 // The offset may be inside a UTF-8 sequence or grapheme. The second result is
 // false at or beyond the normalized string end
 func NextGraphemeBoundary(input string, byteOffset int) (int, bool) {
-	input = NormalizeUTF8(input)
-	if byteOffset < 0 || byteOffset >= len(input) {
+	iterator := IterateGraphemes(input)
+	if byteOffset < 0 || byteOffset >= len(iterator.input) {
 		return 0, false
 	}
-	for _, grapheme := range Graphemes(input) {
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
 		if grapheme.End > byteOffset {
 			return grapheme.End, true
 		}
@@ -84,12 +107,12 @@ func NextGraphemeBoundary(input string, byteOffset int) (int, bool) {
 // The offset may be inside a UTF-8 sequence or grapheme. The second result is
 // false at zero or outside the normalized string
 func PreviousGraphemeBoundary(input string, byteOffset int) (int, bool) {
-	input = NormalizeUTF8(input)
-	if byteOffset <= 0 || byteOffset > len(input) {
+	iterator := IterateGraphemes(input)
+	if byteOffset <= 0 || byteOffset > len(iterator.input) {
 		return 0, false
 	}
 	previous := 0
-	for _, grapheme := range Graphemes(input) {
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
 		if grapheme.End >= byteOffset {
 			break
 		}
@@ -100,20 +123,35 @@ func PreviousGraphemeBoundary(input string, byteOffset int) (int, bool) {
 
 func nextBoundaryFrom(input string, start int) int {
 	first, size := utf8.DecodeRuneInString(input[start:])
-	prefix := []rune{first}
+	state := newGraphemeBoundaryState(first)
 	for offset := start + size; offset < len(input); {
 		right, rightSize := utf8.DecodeRuneInString(input[offset:])
-		if shouldBreak(prefix, right) {
+		if state.breaksBefore(right) {
 			return offset
 		}
-		prefix = append(prefix, right)
+		state.append(right)
 		offset += rightSize
 	}
 	return len(input)
 }
 
-func shouldBreak(prefix []rune, right rune) bool {
-	left := graphemeProperty(prefix[len(prefix)-1])
+type graphemeBoundaryState struct {
+	left                       graphemeBreak
+	trailingRegionalIndicators int
+	indicConsonant             bool
+	indicLinker                bool
+	emojiBase                  bool
+	emojiZWJ                   bool
+}
+
+func newGraphemeBoundaryState(first rune) graphemeBoundaryState {
+	var state graphemeBoundaryState
+	state.append(first)
+	return state
+}
+
+func (s graphemeBoundaryState) breaksBefore(right rune) bool {
+	left := s.left
 	rightProperty := graphemeProperty(right)
 	if left == graphemeCR && rightProperty == graphemeLF {
 		return false
@@ -136,53 +174,43 @@ func shouldBreak(prefix []rune, right rune) bool {
 	if rightProperty == graphemeSpacingMark || left == graphemePrepend {
 		return false
 	}
-	if indicLinkerBefore(prefix, right) || emojiZWJBefore(prefix, right) {
+	if indicConjunctProperty(right) == indicConsonant && s.indicConsonant && s.indicLinker {
 		return false
 	}
-	if rightProperty == graphemeRegionalIndicator && trailingRegionalIndicators(prefix)%2 == 1 {
+	if isExtendedPictographic(right) && left == graphemeZWJ && s.emojiZWJ {
+		return false
+	}
+	if rightProperty == graphemeRegionalIndicator && s.trailingRegionalIndicators%2 == 1 {
 		return false
 	}
 	return true
 }
 
-func indicLinkerBefore(prefix []rune, right rune) bool {
-	if indicConjunctProperty(right) != indicConsonant {
-		return false
+func (s *graphemeBoundaryState) append(character rune) {
+	property := graphemeProperty(character)
+	if property == graphemeRegionalIndicator {
+		s.trailingRegionalIndicators++
+	} else {
+		s.trailingRegionalIndicators = 0
 	}
-	linkerSeen := false
-	for index := len(prefix) - 1; index >= 0; index-- {
-		switch indicConjunctProperty(prefix[index]) {
-		case indicLinker:
-			linkerSeen = true
-		case indicExtend:
-		case indicConsonant:
-			return linkerSeen
-		default:
-			return false
-		}
-	}
-	return false
-}
 
-func emojiZWJBefore(prefix []rune, right rune) bool {
-	if !isExtendedPictographic(right) || graphemeProperty(prefix[len(prefix)-1]) != graphemeZWJ {
-		return false
-	}
-	for index := len(prefix) - 2; index >= 0; index-- {
-		if graphemeProperty(prefix[index]) != graphemeExtend {
-			return isExtendedPictographic(prefix[index])
+	switch indicConjunctProperty(character) {
+	case indicConsonant:
+		s.indicConsonant = true
+		s.indicLinker = false
+	case indicLinker:
+		if s.indicConsonant {
+			s.indicLinker = true
 		}
+	case indicExtend:
+	default:
+		s.indicConsonant = false
+		s.indicLinker = false
 	}
-	return false
-}
 
-func trailingRegionalIndicators(prefix []rune) int {
-	count := 0
-	for index := len(prefix) - 1; index >= 0; index-- {
-		if graphemeProperty(prefix[index]) != graphemeRegionalIndicator {
-			break
-		}
-		count++
+	s.emojiZWJ = property == graphemeZWJ && s.emojiBase
+	if property != graphemeExtend {
+		s.emojiBase = isExtendedPictographic(character)
 	}
-	return count
+	s.left = property
 }

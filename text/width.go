@@ -35,13 +35,9 @@ func CustomWidth(base WidthProfile, override WidthOverride) WidthProfile {
 // A single grapheme is the intended input. More than one grapheme returns the
 // total width
 func GraphemeWidth(input string, profile WidthProfile) int {
-	input = NormalizeUTF8(input)
-	graphemes := Graphemes(input)
-	if len(graphemes) == 0 {
-		return 0
-	}
+	iterator := IterateGraphemes(input)
 	total := 0
-	for _, grapheme := range graphemes {
+	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
 		total += clusterWidth(grapheme.Text, profile)
 	}
 	return total
@@ -56,42 +52,44 @@ func clusterWidth(grapheme string, profile WidthProfile) int {
 			return cells
 		}
 	}
-	characters := []rune(grapheme)
-	if len(characters) == 0 {
+	if grapheme == "" {
 		return 0
 	}
-	for _, character := range characters {
+	for _, character := range grapheme {
 		if graphemeProperty(character).isControl() {
 			return 0
 		}
 	}
-	if isRGIEmoji(characters) {
+	if isRGIEmoji(grapheme) {
 		return 2
 	}
 
 	textPresentation := false
-	for index := 1; index < len(characters); index++ {
-		if !isEmojiVariationBase(characters[index-1]) {
-			continue
+	var previous rune
+	hasPrevious := false
+	for _, character := range grapheme {
+		if hasPrevious && isEmojiVariationBase(previous) {
+			if character == 0xFE0F {
+				return 2
+			}
+			if character == 0xFE0E {
+				textPresentation = true
+			}
 		}
-		if characters[index] == 0xFE0F {
-			return 2
-		}
-		if characters[index] == 0xFE0E {
-			textPresentation = true
-		}
+		previous = character
+		hasPrevious = true
 	}
 	if textPresentation {
 		return 1
 	}
-	for _, character := range characters {
+	for _, character := range grapheme {
 		if isEmojiPresentation(character) {
 			return 2
 		}
 	}
 
 	width := 0
-	for _, character := range characters {
+	for _, character := range grapheme {
 		property := graphemeProperty(character)
 		if property == graphemeExtend || property == graphemeZWJ || property == graphemePrepend {
 			continue

@@ -82,11 +82,11 @@ func isEmojiVariationBase(character rune) bool {
 	return found && index < len(emojiVariationBases)
 }
 
-func isRGIEmoji(sequence []rune) bool {
+func isRGIEmoji(sequence string) bool {
 	index := sort.Search(len(rgiEmojiSequences), func(index int) bool {
-		return compareRunes(rgiEmojiSequences[index], sequence) >= 0
+		return compareRunesToString(rgiEmojiSequences[index], sequence) >= 0
 	})
-	return index < len(rgiEmojiSequences) && compareRunes(rgiEmojiSequences[index], sequence) == 0
+	return index < len(rgiEmojiSequences) && compareRunesToString(rgiEmojiSequences[index], sequence) == 0
 }
 
 func valueAt(ranges []valueRange, character rune) uint8 {
@@ -107,21 +107,19 @@ func slicesBinarySearch(values []rune, wanted rune) (int, bool) {
 	return index, index < len(values) && values[index] == wanted
 }
 
-func compareRunes(left, right []rune) int {
-	for index := 0; index < min(len(left), len(right)); index++ {
-		if left[index] < right[index] {
+func compareRunesToString(left []rune, right string) int {
+	index := 0
+	for _, rightCharacter := range right {
+		if index >= len(left) || left[index] < rightCharacter {
 			return -1
 		}
-		if left[index] > right[index] {
+		if left[index] > rightCharacter {
 			return 1
 		}
+		index++
 	}
-	switch {
-	case len(left) < len(right):
-		return -1
-	case len(left) > len(right):
+	if index < len(left) {
 		return 1
-	default:
-		return 0
 	}
+	return 0
 }
