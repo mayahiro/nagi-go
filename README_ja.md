@@ -17,11 +17,10 @@ Application runtime、Surface、Widget、terminal session、CLI command lifecycl
 
 ## 最初のrelease後のInstallation
 
-v0.1.0の公開後にApplicationが必要とするpackageだけを追加します
+v0.1.0の公開後に共有moduleを1回追加し、Applicationでは必要なpackageだけをimportします
 
 ```sh
-go get github.com/mayahiro/nagi-go/text@v0.1.0
-go get github.com/mayahiro/nagi-go/vt@v0.1.0
+go get github.com/mayahiro/nagi-go@v0.1.0
 ```
 
 両packageは同じmodule versionでreleaseします

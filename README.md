@@ -19,11 +19,11 @@ CLI command lifecycle
 
 ## Installation after the first release
 
-After v0.1.0 is published, import only the package an application needs
+After v0.1.0 is published, add the shared module once and import only the
+packages an application needs
 
 ```sh
-go get github.com/mayahiro/nagi-go/text@v0.1.0
-go get github.com/mayahiro/nagi-go/vt@v0.1.0
+go get github.com/mayahiro/nagi-go@v0.1.0
 ```
 
 Both packages are released together under the module version
