@@ -1,9 +1,9 @@
 package vt
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // SgrColorKind identifies an SGR color representation
@@ -299,56 +299,68 @@ func EndSynchronizedUpdate() TerminalOp {
 
 // Encode encodes terminal operations deterministically for capabilities
 func Encode(operations []TerminalOp, capabilities Capabilities) []byte {
-	var output strings.Builder
-	for _, operation := range operations {
-		encodeOperation(&output, operation, capabilities)
-	}
-	return []byte(output.String())
+	return AppendEncoded(nil, operations, capabilities)
 }
 
-func encodeOperation(output *strings.Builder, operation TerminalOp, capabilities Capabilities) {
+// AppendEncoded appends deterministic terminal encoding to destination and
+// returns the extended buffer
+func AppendEncoded(destination []byte, operations []TerminalOp, capabilities Capabilities) []byte {
+	output := destination
+	for _, operation := range operations {
+		output = appendEncodedOperation(output, operation, capabilities)
+	}
+	return output
+}
+
+func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Capabilities) []byte {
 	switch operation.kind {
 	case opMoveTo:
-		fmt.Fprintf(output, "\x1B[%d;%dH", uint64(operation.y)+1, uint64(operation.x)+1)
+		output = append(output, "\x1B["...)
+		output = strconv.AppendUint(output, uint64(operation.y)+1, 10)
+		output = append(output, ';')
+		output = strconv.AppendUint(output, uint64(operation.x)+1, 10)
+		output = append(output, 'H')
 	case opMoveRelative:
 		if operation.dy < 0 {
-			writeCSICount(output, uint32(-int64(operation.dy)), 'A')
+			output = appendCSICount(output, uint32(-int64(operation.dy)), 'A')
 		} else if operation.dy > 0 {
-			writeCSICount(output, uint32(operation.dy), 'B')
+			output = appendCSICount(output, uint32(operation.dy), 'B')
 		}
 		if operation.dx > 0 {
-			writeCSICount(output, uint32(operation.dx), 'C')
+			output = appendCSICount(output, uint32(operation.dx), 'C')
 		} else if operation.dx < 0 {
-			writeCSICount(output, uint32(-int64(operation.dx)), 'D')
+			output = appendCSICount(output, uint32(-int64(operation.dx)), 'D')
 		}
 	case opSetStyle:
-		writeStyle(output, operation.style, capabilities)
+		output = appendStyle(output, operation.style, capabilities)
 	case opResetStyle:
-		output.WriteString("\x1B[0m")
+		output = append(output, "\x1B[0m"...)
 	case opWriteText:
-		writeSafeText(output, operation.text)
+		output = appendSafeText(output, operation.text)
 	case opEraseLine:
-		writeErase(output, operation.erase, 'K')
+		output = appendErase(output, operation.erase, 'K')
 	case opEraseDisplay:
-		writeErase(output, operation.erase, 'J')
+		output = appendErase(output, operation.erase, 'J')
 	case opShowCursor:
-		output.WriteString("\x1B[?25h")
+		output = append(output, "\x1B[?25h"...)
 	case opHideCursor:
-		output.WriteString("\x1B[?25l")
+		output = append(output, "\x1B[?25l"...)
 	case opSetCursorShape:
 		if capabilities.CursorShape && operation.cursorShape <= CursorSteadyBar {
-			fmt.Fprintf(output, "\x1B[%d q", uint8(operation.cursorShape))
+			output = append(output, "\x1B["...)
+			output = strconv.AppendUint(output, uint64(operation.cursorShape), 10)
+			output = append(output, ' ', 'q')
 		}
 	case opEnterAlternate:
-		output.WriteString("\x1B[?1049h")
+		output = append(output, "\x1B[?1049h"...)
 	case opLeaveAlternate:
-		output.WriteString("\x1B[?1049l")
+		output = append(output, "\x1B[?1049l"...)
 	case opEnablePaste:
-		output.WriteString("\x1B[?2004h")
+		output = append(output, "\x1B[?2004h"...)
 	case opDisablePaste:
-		output.WriteString("\x1B[?2004l")
+		output = append(output, "\x1B[?2004l"...)
 	case opEnableMouse:
-		mode := 0
+		var mode uint64
 		switch operation.mouseTracking {
 		case MouseTrackingPress:
 			mode = 1000
@@ -358,87 +370,103 @@ func encodeOperation(output *strings.Builder, operation TerminalOp, capabilities
 			mode = 1003
 		}
 		if mode != 0 {
-			fmt.Fprintf(output, "\x1B[?%dh\x1B[?1006h", mode)
+			output = append(output, "\x1B[?"...)
+			output = strconv.AppendUint(output, mode, 10)
+			output = append(output, "h\x1B[?1006h"...)
 		}
 	case opDisableMouse:
-		output.WriteString("\x1B[?1000l\x1B[?1002l\x1B[?1003l\x1B[?1006l")
+		output = append(output, "\x1B[?1000l\x1B[?1002l\x1B[?1003l\x1B[?1006l"...)
 	case opEnableFocus:
-		output.WriteString("\x1B[?1004h")
+		output = append(output, "\x1B[?1004h"...)
 	case opDisableFocus:
-		output.WriteString("\x1B[?1004l")
+		output = append(output, "\x1B[?1004l"...)
 	case opBeginSync:
 		if capabilities.SynchronizedUpdates {
-			output.WriteString("\x1B[?2026h")
+			output = append(output, "\x1B[?2026h"...)
 		}
 	case opEndSync:
 		if capabilities.SynchronizedUpdates {
-			output.WriteString("\x1B[?2026l")
+			output = append(output, "\x1B[?2026l"...)
 		}
 	}
+	return output
 }
 
-func writeCSICount(output *strings.Builder, count uint32, finalCharacter byte) {
-	fmt.Fprintf(output, "\x1B[%d%c", count, finalCharacter)
+func appendCSICount(output []byte, count uint32, finalCharacter byte) []byte {
+	output = append(output, "\x1B["...)
+	output = strconv.AppendUint(output, uint64(count), 10)
+	return append(output, finalCharacter)
 }
 
-func writeErase(output *strings.Builder, mode EraseMode, finalCharacter byte) {
-	fmt.Fprintf(output, "\x1B[%d%c", uint8(mode), finalCharacter)
+func appendErase(output []byte, mode EraseMode, finalCharacter byte) []byte {
+	return append(append(output, "\x1B["...), byte('0'+mode), finalCharacter)
 }
 
-func writeStyle(output *strings.Builder, style SgrStyle, capabilities Capabilities) {
-	parameters := []string{"0"}
-	pushColor(&parameters, style.Foreground, 38, capabilities)
-	pushColor(&parameters, style.Background, 48, capabilities)
+func appendStyle(output []byte, style SgrStyle, capabilities Capabilities) []byte {
+	output = append(output, "\x1B[0"...)
+	output = appendColor(output, style.Foreground, 38, capabilities)
+	output = appendColor(output, style.Background, 48, capabilities)
 	if capabilities.UnderlineColor {
 		if color, ok := style.UnderlineColor.Get(); ok {
-			pushExtendedColor(&parameters, color, 58, capabilities)
+			output = appendExtendedColor(output, color, 58, capabilities)
 		}
 	}
 	attributes := []struct {
 		enabled bool
-		code    string
+		code    byte
 	}{
-		{style.Bold, "1"}, {style.Dim, "2"}, {style.Italic, "3"}, {style.Underline, "4"},
-		{style.Blink, "5"}, {style.Reverse, "7"}, {style.Hidden, "8"}, {style.Strikethrough, "9"},
+		{style.Bold, '1'}, {style.Dim, '2'}, {style.Italic, '3'}, {style.Underline, '4'},
+		{style.Blink, '5'}, {style.Reverse, '7'}, {style.Hidden, '8'}, {style.Strikethrough, '9'},
 	}
 	for _, attribute := range attributes {
 		if attribute.enabled {
-			parameters = append(parameters, attribute.code)
+			output = append(output, ';', attribute.code)
 		}
 	}
-	output.WriteString("\x1B[")
-	output.WriteString(strings.Join(parameters, ";"))
-	output.WriteByte('m')
+	return append(output, 'm')
 }
 
-func pushColor(parameters *[]string, color SgrColor, prefix int, capabilities Capabilities) {
+func appendColor(output []byte, color SgrColor, prefix uint64, capabilities Capabilities) []byte {
 	if color.Kind() == SgrColorDefault {
-		return
+		return output
 	}
-	pushExtendedColor(parameters, color, prefix, capabilities)
+	return appendExtendedColor(output, color, prefix, capabilities)
 }
 
-func pushExtendedColor(parameters *[]string, color SgrColor, prefix int, capabilities Capabilities) {
+func appendExtendedColor(output []byte, color SgrColor, prefix uint64, capabilities Capabilities) []byte {
+	appendParameter := func(value uint64) {
+		output = append(output, ';')
+		output = strconv.AppendUint(output, value, 10)
+	}
 	switch color.Kind() {
 	case SgrColorDefault:
-		reset := 39
+		reset := uint64(39)
 		if prefix == 48 {
 			reset = 49
 		} else if prefix == 58 {
 			reset = 59
 		}
-		*parameters = append(*parameters, strconv.Itoa(reset))
+		appendParameter(reset)
 	case SgrColorIndexed:
 		index, _ := color.Index()
-		*parameters = append(*parameters, strconv.Itoa(prefix), "5", strconv.Itoa(int(index)))
+		appendParameter(prefix)
+		appendParameter(5)
+		appendParameter(uint64(index))
 	case SgrColorRGB:
 		red, green, blue, _ := color.RGB()
 		if capabilities.TrueColor {
-			*parameters = append(*parameters, strconv.Itoa(prefix), "2", strconv.Itoa(int(red)), strconv.Itoa(int(green)), strconv.Itoa(int(blue)))
+			appendParameter(prefix)
+			appendParameter(2)
+			appendParameter(uint64(red))
+			appendParameter(uint64(green))
+			appendParameter(uint64(blue))
 		} else {
-			*parameters = append(*parameters, strconv.Itoa(prefix), "5", strconv.Itoa(int(indexedRGB(red, green, blue))))
+			appendParameter(prefix)
+			appendParameter(5)
+			appendParameter(uint64(indexedRGB(red, green, blue)))
 		}
 	}
+	return output
 }
 
 func indexedRGB(red, green, blue uint8) uint8 {
@@ -448,13 +476,14 @@ func indexedRGB(red, green, blue uint8) uint8 {
 	return 16 + 36*level(red) + 6*level(green) + level(blue)
 }
 
-func writeSafeText(output *strings.Builder, input string) {
+func appendSafeText(output []byte, input string) []byte {
 	input = strings.ToValidUTF8(input, "\uFFFD")
 	for _, character := range input {
 		if character <= 0x1F || (character >= 0x7F && character <= 0x9F) {
-			output.WriteRune('\uFFFD')
+			output = utf8.AppendRune(output, '\uFFFD')
 		} else {
-			output.WriteRune(character)
+			output = utf8.AppendRune(output, character)
 		}
 	}
+	return output
 }

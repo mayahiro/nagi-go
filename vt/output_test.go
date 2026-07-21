@@ -17,3 +17,11 @@ func TestMinimumRelativeDeltaDoesNotOverflow(t *testing.T) {
 		t.Fatalf("Encode() = %q, want %q", got, want)
 	}
 }
+
+func TestAppendEncodedPreservesDestinationPrefix(t *testing.T) {
+	got := AppendEncoded([]byte("prefix:"), []TerminalOp{MoveTo(2, 3), WriteText("ok")}, BaselineCapabilities())
+	want := "prefix:\x1B[4;3Hok"
+	if string(got) != want {
+		t.Fatalf("AppendEncoded() = %q, want %q", got, want)
+	}
+}
