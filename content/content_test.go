@@ -29,11 +29,61 @@ func TestImmutableStorageAndDefensiveSlices(t *testing.T) {
 	if got := element.Roles()[0].String(); got != "document" {
 		t.Fatalf("Roles()[0] = %q, want document", got)
 	}
+	if !element.HasRole(role) {
+		t.Fatal("HasRole() = false, want true")
+	}
+	if element.HasRole(Role{}) {
+		t.Fatal("HasRole() matched the zero Role")
+	}
+	if got := element.ChildCount(); got != 1 {
+		t.Fatalf("ChildCount() = %d, want 1", got)
+	}
+	child, ok := element.Child(0)
+	if !ok || ProjectSemanticText(child).Text() != "original" {
+		t.Fatalf("Child(0) = %q, %t, want original, true", ProjectSemanticText(child).Text(), ok)
+	}
+	if _, ok := element.Child(-1); ok {
+		t.Fatal("Child(-1) unexpectedly returned a child")
+	}
+	if _, ok := element.Child(1); ok {
+		t.Fatal("Child(1) unexpectedly returned a child")
+	}
 
 	content := element.Content()
 	cloned := content
 	if content.inner != cloned.inner {
 		t.Fatal("content copy did not share immutable storage")
+	}
+}
+
+func TestAllocationFreeMetadataMembership(t *testing.T) {
+	role, err := NewRole("document")
+	if err != nil {
+		t.Fatal(err)
+	}
+	class, err := NewClass("source.bold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	element, err := NewInline([]Content{NewText("content")}).WithRoles([]Role{role})
+	if err != nil {
+		t.Fatal(err)
+	}
+	element, err = element.WithClasses([]Class{class})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allocations := testing.AllocsPerRun(1_000, func() {
+		if !element.HasRole(role) || !element.HasClass(class) || element.ChildCount() != 1 {
+			panic("unexpected element lookup result")
+		}
+		if _, ok := element.Child(0); !ok {
+			panic("missing child")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("element lookup allocations = %f, want 0", allocations)
 	}
 }
 
@@ -85,6 +135,12 @@ func TestZeroValuesAreUsable(t *testing.T) {
 	var element Element
 	if got := ProjectSemanticText(element.Content()).Text(); got != "" {
 		t.Fatalf("zero Element projection = %q", got)
+	}
+	if element.ChildCount() != 0 || element.HasRole(Role{}) || element.HasClass(Class{}) {
+		t.Fatal("zero Element unexpectedly contains children or metadata")
+	}
+	if _, ok := element.Child(0); ok {
+		t.Fatal("zero Element Child(0) unexpectedly returned a child")
 	}
 }
 

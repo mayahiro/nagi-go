@@ -228,9 +228,31 @@ func (e Element) Roles() []Role {
 	return append([]Role(nil), e.data().roles...)
 }
 
+// HasRole reports whether this element contains role in its ordered semantic
+// role set without allocating a copy of that set.
+func (e Element) HasRole(role Role) bool {
+	for _, candidate := range e.data().roles {
+		if candidate == role {
+			return true
+		}
+	}
+	return false
+}
+
 // Classes returns a copy of the ordered unique presentation classes
 func (e Element) Classes() []Class {
 	return append([]Class(nil), e.data().classes...)
+}
+
+// HasClass reports whether this element contains class in its ordered
+// presentation class set without allocating a copy of that set.
+func (e Element) HasClass(class Class) bool {
+	for _, candidate := range e.data().classes {
+		if candidate == class {
+			return true
+		}
+	}
+	return false
 }
 
 // Annotation returns the optional application-resolved annotation identity
@@ -247,6 +269,21 @@ func (e Element) Boundary() SemanticBoundary {
 // Children returns a copy of the immutable ordered children
 func (e Element) Children() []Content {
 	return append([]Content(nil), e.data().children...)
+}
+
+// ChildCount returns the number of immutable ordered children.
+func (e Element) ChildCount() int {
+	return len(e.data().children)
+}
+
+// Child returns one immutable child by zero-based index without allocating a
+// copy of the complete child sequence.
+func (e Element) Child(index int) (Content, bool) {
+	children := e.data().children
+	if index < 0 || index >= len(children) {
+		return Content{}, false
+	}
+	return children[index], true
 }
 
 // WithID returns this element with a stable identity
