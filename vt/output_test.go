@@ -25,3 +25,11 @@ func TestAppendEncodedPreservesDestinationPrefix(t *testing.T) {
 		t.Fatalf("AppendEncoded() = %q, want %q", got, want)
 	}
 }
+
+func TestSetClipboardNormalizesInvalidUTF8AndEncodesControls(t *testing.T) {
+	got := string(Encode([]TerminalOp{SetClipboard("a\xFF\x1B日")}, BaselineCapabilities()))
+	want := "\x1B]52;c;Ye+/vRvml6U=\x1B\\"
+	if got != want {
+		t.Fatalf("Encode(SetClipboard) = %q, want %q", got, want)
+	}
+}

@@ -181,6 +181,7 @@ const (
 	opDisableMouse
 	opEnableFocus
 	opDisableFocus
+	opSetClipboard
 	opBeginSync
 	opEndSync
 )
@@ -287,6 +288,13 @@ func DisableFocus() TerminalOp {
 	return TerminalOp{kind: opDisableFocus}
 }
 
+// SetClipboard returns a write-only OSC 52 operation for the standard clipboard
+//
+// Invalid UTF-8 runs are replaced with U+FFFD before Base64 encoding.
+func SetClipboard(text string) TerminalOp {
+	return TerminalOp{kind: opSetClipboard, text: strings.ToValidUTF8(text, "\uFFFD")}
+}
+
 // BeginSynchronizedUpdate returns a synchronized-update begin operation
 func BeginSynchronizedUpdate() TerminalOp {
 	return TerminalOp{kind: opBeginSync}
@@ -380,6 +388,10 @@ func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Ca
 		output = append(output, "\x1B[?1004h"...)
 	case opDisableFocus:
 		output = append(output, "\x1B[?1004l"...)
+	case opSetClipboard:
+		output = append(output, "\x1B]52;c;"...)
+		output = appendBase64String(output, operation.text)
+		output = append(output, '\x1B', '\\')
 	case opBeginSync:
 		if capabilities.SynchronizedUpdates {
 			output = append(output, "\x1B[?2026h"...)
@@ -388,6 +400,34 @@ func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Ca
 		if capabilities.SynchronizedUpdates {
 			output = append(output, "\x1B[?2026l"...)
 		}
+	}
+	return output
+}
+
+func appendBase64String(output []byte, input string) []byte {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	index := 0
+	for ; index+3 <= len(input); index += 3 {
+		first, second, third := input[index], input[index+1], input[index+2]
+		output = append(output,
+			alphabet[first>>2],
+			alphabet[(first&0x03)<<4|second>>4],
+			alphabet[(second&0x0F)<<2|third>>6],
+			alphabet[third&0x3F],
+		)
+	}
+	switch len(input) - index {
+	case 1:
+		first := input[index]
+		output = append(output, alphabet[first>>2], alphabet[(first&0x03)<<4], '=', '=')
+	case 2:
+		first, second := input[index], input[index+1]
+		output = append(output,
+			alphabet[first>>2],
+			alphabet[(first&0x03)<<4|second>>4],
+			alphabet[(second&0x0F)<<2],
+			'=',
+		)
 	}
 	return output
 }

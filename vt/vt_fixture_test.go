@@ -286,6 +286,12 @@ func fixtureOperations(value string) []TerminalOp {
 			operations[index] = EnableFocus()
 		case "disable-focus":
 			operations[index] = DisableFocus()
+		case "set-clipboard":
+			if fields[1] == "-" {
+				operations[index] = SetClipboard("")
+			} else {
+				operations[index] = SetClipboard(fixtureScalarText(fields[1]))
+			}
 		case "begin-sync":
 			operations[index] = BeginSynchronizedUpdate()
 		case "end-sync":
