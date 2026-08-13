@@ -165,6 +165,8 @@ type operationKind uint8
 const (
 	opMoveTo operationKind = iota
 	opMoveRelative
+	opRequestCursorPosition
+	opNextLine
 	opSetStyle
 	opResetStyle
 	opWriteText
@@ -206,6 +208,18 @@ func MoveTo(x, y uint32) TerminalOp {
 // MoveRelative returns a signed relative cursor movement
 func MoveRelative(dx, dy int32) TerminalOp {
 	return TerminalOp{kind: opMoveRelative, dx: dx, dy: dy}
+}
+
+// RequestCursorPosition returns an operation requesting a one-based cursor
+// position report from the terminal
+func RequestCursorPosition() TerminalOp {
+	return TerminalOp{kind: opRequestCursorPosition}
+}
+
+// NextLine returns an operation moving to column zero of the next line and
+// scrolling when necessary
+func NextLine() TerminalOp {
+	return TerminalOp{kind: opNextLine}
 }
 
 // SetStyle returns a complete SGR style operation
@@ -310,23 +324,50 @@ func Encode(operations []TerminalOp, capabilities Capabilities) []byte {
 	return AppendEncoded(nil, operations, capabilities)
 }
 
+// EncodeAt encodes operations after translating absolute positions by origin
+//
+// Relative movement and every non-position operation are unchanged. Coordinate
+// addition saturates at the uint32 maximum.
+func EncodeAt(operations []TerminalOp, capabilities Capabilities, originX, originY uint32) []byte {
+	return AppendEncodedAt(nil, operations, capabilities, originX, originY)
+}
+
 // AppendEncoded appends deterministic terminal encoding to destination and
 // returns the extended buffer
 func AppendEncoded(destination []byte, operations []TerminalOp, capabilities Capabilities) []byte {
+	return AppendEncodedAt(destination, operations, capabilities, 0, 0)
+}
+
+// AppendEncodedAt appends deterministic terminal encoding with an
+// absolute-position origin
+//
+// Relative movement and every non-position operation are unchanged. Coordinate
+// addition saturates at the uint32 maximum.
+func AppendEncodedAt(
+	destination []byte,
+	operations []TerminalOp,
+	capabilities Capabilities,
+	originX, originY uint32,
+) []byte {
 	output := destination
 	for _, operation := range operations {
-		output = appendEncodedOperation(output, operation, capabilities)
+		output = appendEncodedOperation(output, operation, capabilities, originX, originY)
 	}
 	return output
 }
 
-func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Capabilities) []byte {
+func appendEncodedOperation(
+	output []byte,
+	operation TerminalOp,
+	capabilities Capabilities,
+	originX, originY uint32,
+) []byte {
 	switch operation.kind {
 	case opMoveTo:
 		output = append(output, "\x1B["...)
-		output = strconv.AppendUint(output, uint64(operation.y)+1, 10)
+		output = strconv.AppendUint(output, uint64(saturatingAddUint32(operation.y, originY))+1, 10)
 		output = append(output, ';')
-		output = strconv.AppendUint(output, uint64(operation.x)+1, 10)
+		output = strconv.AppendUint(output, uint64(saturatingAddUint32(operation.x, originX))+1, 10)
 		output = append(output, 'H')
 	case opMoveRelative:
 		if operation.dy < 0 {
@@ -339,6 +380,10 @@ func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Ca
 		} else if operation.dx < 0 {
 			output = appendCSICount(output, uint32(-int64(operation.dx)), 'D')
 		}
+	case opRequestCursorPosition:
+		output = append(output, "\x1B[6n"...)
+	case opNextLine:
+		output = append(output, '\x1B', 'E')
 	case opSetStyle:
 		output = appendStyle(output, operation.style, capabilities)
 	case opResetStyle:
@@ -402,6 +447,13 @@ func appendEncodedOperation(output []byte, operation TerminalOp, capabilities Ca
 		}
 	}
 	return output
+}
+
+func saturatingAddUint32(left, right uint32) uint32 {
+	if ^uint32(0)-left < right {
+		return ^uint32(0)
+	}
+	return left + right
 }
 
 func appendBase64String(output []byte, input string) []byte {

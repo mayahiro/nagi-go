@@ -58,6 +58,35 @@ func TestOutputFixtures(t *testing.T) {
 	}
 }
 
+func TestOutputOriginFixtures(t *testing.T) {
+	records := vtRecords(t, "vt/output-origin.txt", "vt-output-origin", "capabilities", "origin", "operations", "expected")
+	for _, record := range records {
+		var capabilities Capabilities
+		switch record.Field("capabilities") {
+		case "modern":
+			capabilities = ModernCapabilities()
+		case "baseline":
+			capabilities = BaselineCapabilities()
+		default:
+			t.Fatalf("case %s has unknown capabilities", record.ID)
+		}
+		origin := strings.Split(record.Field("origin"), ",")
+		if len(origin) != 2 {
+			t.Fatalf("case %s has invalid origin", record.ID)
+		}
+		got := EncodeAt(
+			fixtureOperations(record.Field("operations")),
+			capabilities,
+			fixtureUnsigned(origin[0]),
+			fixtureUnsigned(origin[1]),
+		)
+		want := record.Bytes("expected")
+		if !bytes.Equal(got, want) {
+			t.Errorf("case %s: EncodeAt() = %q, want %q", record.ID, got, want)
+		}
+	}
+}
+
 func vtRecords(t *testing.T, path, suite string, fields ...string) []conformance.Record {
 	t.Helper()
 	records, err := conformance.Load(path, suite, fields...)
@@ -254,6 +283,10 @@ func fixtureOperations(value string) []TerminalOp {
 			operations[index] = MoveTo(fixtureUnsigned(fields[1]), fixtureUnsigned(fields[2]))
 		case "move-relative":
 			operations[index] = MoveRelative(fixtureSigned(fields[1]), fixtureSigned(fields[2]))
+		case "request-cursor-position":
+			operations[index] = RequestCursorPosition()
+		case "next-line":
+			operations[index] = NextLine()
 		case "set-style":
 			operations[index] = SetStyle(fixtureStyle(fields[1]))
 		case "reset-style":
