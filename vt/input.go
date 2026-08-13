@@ -52,11 +52,21 @@ type Decoder struct {
 	sawEscape      bool
 	utf8Pending    []byte
 	invalidTextRun bool
+	kittyKeyboard  bool
 }
 
 // NewDecoder returns a decoder in the ground state
 func NewDecoder() *Decoder {
 	return &Decoder{utf8Pending: make([]byte, 0, utf8.UTFMax)}
+}
+
+// SetKittyKeyboardMode selects Kitty modifier semantics for otherwise
+// ambiguous function-key sequences
+//
+// Unambiguous CSI-u reports are decoded as Kitty input in either mode. The
+// configured mode applies to every sequence completed after this call.
+func (d *Decoder) SetKittyKeyboardMode(enabled bool) {
+	d.kittyKeyboard = enabled
 }
 
 // Feed consumes one arbitrary byte chunk and returns all completed events
@@ -94,9 +104,7 @@ func (d *Decoder) FlushPending() []Event {
 	default:
 		events = append(events, unknownEvent(d.sequence))
 	}
-	d.state = stateGround
-	d.sequence = nil
-	d.sawEscape = false
+	d.resetState()
 	return events
 }
 
@@ -115,9 +123,9 @@ func (d *Decoder) process(value byte, events *[]Event) {
 		case value >= 0x40 && value <= 0x7E:
 			if bytes.Equal(d.sequence, pasteStart) {
 				d.state = statePaste
-				d.sequence = nil
+				d.sequence = d.sequence[:0]
 			} else {
-				*events = append(*events, parseCSI(d.sequence))
+				*events = append(*events, parseCSI(d.sequence, d.kittyKeyboard))
 				d.resetState()
 			}
 		case value < 0x20 || value > 0x3F:
@@ -205,18 +213,18 @@ func (d *Decoder) processEscape(value byte, events *[]Event) {
 	switch value {
 	case '[':
 		d.state = stateCSI
-		d.sequence = []byte{escapeByte, '['}
+		d.startSequence('[')
 	case 'O':
 		d.state = stateSS3
-		d.sequence = []byte{escapeByte, 'O'}
+		d.startSequence('O')
 	case ']':
 		d.state = stateControlString
 		d.controlKind = controlOSC
-		d.sequence = []byte{escapeByte, ']'}
+		d.startSequence(']')
 	case 'P', '^', '_':
 		d.state = stateControlString
 		d.controlKind = controlOther
-		d.sequence = []byte{escapeByte, value}
+		d.startSequence(value)
 	case escapeByte:
 		*events = append(*events, escapeEvent())
 		d.state = stateEscape
@@ -234,12 +242,16 @@ func (d *Decoder) processEscape(value byte, events *[]Event) {
 			d.resetState()
 		case utf8Expected(value) != 0:
 			d.state = stateAltUTF8
-			d.sequence = []byte{escapeByte, value}
+			d.startSequence(value)
 		default:
 			*events = append(*events, unknownEvent([]byte{escapeByte, value}))
 			d.resetState()
 		}
 	}
+}
+
+func (d *Decoder) startSequence(second byte) {
+	d.sequence = append(d.sequence[:0], escapeByte, second)
 }
 
 func (d *Decoder) processTextByte(value byte, events *[]Event) {
@@ -294,7 +306,11 @@ func (d *Decoder) flushInvalidText(events *[]Event) {
 
 func (d *Decoder) resetState() {
 	d.state = stateGround
-	d.sequence = nil
+	if cap(d.sequence) > MaxSequenceBytes {
+		d.sequence = nil
+	} else {
+		d.sequence = d.sequence[:0]
+	}
 	d.controlKind = controlOther
 	d.sawEscape = false
 }
@@ -346,7 +362,7 @@ func validUTF8Prefix(input []byte) bool {
 	return true
 }
 
-func parseCSI(sequence []byte) Event {
+func parseCSI(sequence []byte, kittyKeyboardMode bool) Event {
 	finalByte := sequence[len(sequence)-1]
 	body := sequence[2 : len(sequence)-1]
 	if len(body) != 0 && body[0] == '<' && (finalByte == 'M' || finalByte == 'm') {
@@ -354,6 +370,18 @@ func parseCSI(sequence []byte) Event {
 			return Event{Kind: EventMouse, Mouse: mouse}
 		}
 		return unknownEvent(sequence)
+	}
+	if finalByte == 'u' {
+		if keyboardEnhancementResponse(body) {
+			return responseEvent(sequence)
+		}
+		if key, ok := parseKittyKey(body); ok {
+			return Event{Kind: EventKey, Key: key}
+		}
+		return unknownEvent(sequence)
+	}
+	if key, ok := parseKittyLegacyFunction(body, finalByte, kittyKeyboardMode); ok {
+		return Event{Kind: EventKey, Key: key}
 	}
 	if len(body) == 0 {
 		if code, ok := simpleCSIKey(finalByte); ok {
@@ -463,6 +491,260 @@ func xtermModifiers(value uint32) (Modifiers, bool) {
 	return Modifiers{
 		Shift: bits&1 != 0, Alt: bits&2 != 0, Control: bits&4 != 0, Meta: bits&8 != 0,
 	}, true
+}
+
+func keyboardEnhancementResponse(body []byte) bool {
+	if len(body) < 2 || body[0] != '?' {
+		return false
+	}
+	for _, value := range body[1:] {
+		if value < '0' || value > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseKittyKey(body []byte) (KeyEvent, bool) {
+	fields, fieldCount, ok := splitKittyKeyFields(body)
+	if !ok {
+		return KeyEvent{}, false
+	}
+	if bytes.IndexByte(fields[0], ':') >= 0 {
+		return KeyEvent{}, false
+	}
+	number, ok := parseRequiredDecimalBytes(fields[0])
+	if !ok {
+		return KeyEvent{}, false
+	}
+	var modifierField []byte
+	if fieldCount >= 2 {
+		modifierField = fields[1]
+	}
+	modifiers, action, ok := parseKittyModifiers(modifierField)
+	if !ok {
+		return KeyEvent{}, false
+	}
+	key, ok := kittyKeyCode(number)
+	if !ok {
+		return KeyEvent{}, false
+	}
+	key.Modifiers = modifiers
+	key.Action = action
+	key.Protocol = KeyProtocolKitty
+	if fieldCount == 3 {
+		key.Text, ok = parseKittyText(fields[2])
+		if !ok {
+			return KeyEvent{}, false
+		}
+		key.HasText = true
+	}
+	if number == 0 && (!key.HasText || key.Text == "") {
+		return KeyEvent{}, false
+	}
+	return key, true
+}
+
+func parseKittyLegacyFunction(body []byte, finalByte byte, kittyKeyboardMode bool) (KeyEvent, bool) {
+	switch finalByte {
+	case 'A', 'B', 'C', 'D', 'F', 'H', 'P', 'Q', 'S', '~':
+	default:
+		return KeyEvent{}, false
+	}
+	separator := bytes.IndexByte(body, ';')
+	if separator < 0 || bytes.IndexByte(body[separator+1:], ';') >= 0 {
+		return KeyEvent{}, false
+	}
+	number, ok := parseRequiredDecimalBytes(body[:separator])
+	if !ok {
+		return KeyEvent{}, false
+	}
+	modifierField := body[separator+1:]
+	actionSeparator := bytes.IndexByte(modifierField, ':')
+	modifierBytes := modifierField
+	if actionSeparator >= 0 {
+		modifierBytes = modifierField[:actionSeparator]
+	}
+	modifierNumber, validModifier := parseRequiredDecimalBytes(modifierBytes)
+	if !validModifier || (!kittyKeyboardMode && actionSeparator < 0 && modifierNumber <= 16) {
+		return KeyEvent{}, false
+	}
+	modifiers, action, ok := parseKittyModifiers(modifierField)
+	if !ok {
+		return KeyEvent{}, false
+	}
+	key := KeyEvent{Modifiers: modifiers, Action: action, Protocol: KeyProtocolKitty}
+	if finalByte == '~' {
+		key.Code, key.Function, ok = tildeKey(number)
+		if !ok {
+			return KeyEvent{}, false
+		}
+		return key, true
+	}
+	if number != 1 {
+		return KeyEvent{}, false
+	}
+	switch finalByte {
+	case 'A':
+		key.Code = KeyUp
+	case 'B':
+		key.Code = KeyDown
+	case 'C':
+		key.Code = KeyRight
+	case 'D':
+		key.Code = KeyLeft
+	case 'F':
+		key.Code = KeyEnd
+	case 'H':
+		key.Code = KeyHome
+	case 'P':
+		key.Code, key.Function = KeyFunction, 1
+	case 'Q':
+		key.Code, key.Function = KeyFunction, 2
+	case 'S':
+		key.Code, key.Function = KeyFunction, 4
+	default:
+		return KeyEvent{}, false
+	}
+	return key, true
+}
+
+func splitKittyKeyFields(body []byte) ([3][]byte, int, bool) {
+	var fields [3][]byte
+	fieldCount := 0
+	start := 0
+	for index, value := range body {
+		if value != ';' {
+			continue
+		}
+		if fieldCount == len(fields)-1 {
+			return fields, 0, false
+		}
+		fields[fieldCount] = body[start:index]
+		fieldCount++
+		start = index + 1
+	}
+	fields[fieldCount] = body[start:]
+	return fields, fieldCount + 1, true
+}
+
+func parseKittyModifiers(field []byte) (Modifiers, KeyAction, bool) {
+	separator := bytes.IndexByte(field, ':')
+	if separator >= 0 && bytes.IndexByte(field[separator+1:], ':') >= 0 {
+		return Modifiers{}, KeyActionUnknown, false
+	}
+	modifierField := field
+	var actionField []byte
+	if separator >= 0 {
+		modifierField = field[:separator]
+		actionField = field[separator+1:]
+	}
+	modifier := uint32(1)
+	var ok bool
+	if len(modifierField) != 0 {
+		modifier, ok = parseRequiredDecimalBytes(modifierField)
+		if !ok {
+			return Modifiers{}, KeyActionUnknown, false
+		}
+	}
+	if modifier < 1 || modifier > 256 {
+		return Modifiers{}, KeyActionUnknown, false
+	}
+	action := KeyPress
+	if separator >= 0 && len(actionField) != 0 {
+		if len(actionField) != 1 {
+			return Modifiers{}, KeyActionUnknown, false
+		}
+		switch actionField[0] {
+		case '1':
+			action = KeyPress
+		case '2':
+			action = KeyRepeat
+		case '3':
+			action = KeyRelease
+		default:
+			return Modifiers{}, KeyActionUnknown, false
+		}
+	}
+	bits := modifier - 1
+	return Modifiers{
+		Shift: bits&1 != 0, Alt: bits&2 != 0, Control: bits&4 != 0,
+		Super: bits&8 != 0, Hyper: bits&16 != 0, Meta: bits&32 != 0,
+		CapsLock: bits&64 != 0, NumLock: bits&128 != 0,
+	}, action, true
+}
+
+func parseKittyText(field []byte) (string, bool) {
+	if len(field) == 0 {
+		return "", true
+	}
+	var output strings.Builder
+	output.Grow(len(field))
+	start := 0
+	for index := 0; index <= len(field); index++ {
+		if index != len(field) && field[index] != ':' {
+			continue
+		}
+		number, ok := parseRequiredDecimalBytes(field[start:index])
+		if !ok || number <= 0x1F || (number >= 0x7F && number <= 0x9F) {
+			return "", false
+		}
+		character := rune(number)
+		if !utf8.ValidRune(character) {
+			return "", false
+		}
+		output.WriteRune(character)
+		start = index + 1
+	}
+	return output.String(), true
+}
+
+func parseRequiredDecimalBytes(value []byte) (uint32, bool) {
+	if len(value) == 0 {
+		return 0, false
+	}
+	var number uint32
+	const maximum = ^uint32(0)
+	for _, digitByte := range value {
+		if digitByte < '0' || digitByte > '9' {
+			return 0, false
+		}
+		digit := uint32(digitByte - '0')
+		if number > (maximum-digit)/10 {
+			return 0, false
+		}
+		number = number*10 + digit
+	}
+	return number, true
+}
+
+func kittyKeyCode(number uint32) (KeyEvent, bool) {
+	switch number {
+	case 0:
+		return KeyEvent{Code: KeyUnknown}, true
+	case 9:
+		return KeyEvent{Code: KeyTab}, true
+	case 13:
+		return KeyEvent{Code: KeyEnter}, true
+	case 27:
+		return KeyEvent{Code: KeyEscape}, true
+	case 127:
+		return KeyEvent{Code: KeyBackspace}, true
+	}
+	if number >= 57_376 && number <= 57_398 {
+		return KeyEvent{Code: KeyFunction, Function: uint8(number - 57_363)}, true
+	}
+	if number >= 57_344 && number <= 63_743 {
+		return KeyEvent{Code: KeyFunctional, Functional: number}, true
+	}
+	if number <= 0x1F || (number >= 0x7F && number <= 0x9F) {
+		return KeyEvent{}, false
+	}
+	character := rune(number)
+	if !utf8.ValidRune(character) {
+		return KeyEvent{}, false
+	}
+	return KeyEvent{Code: KeyCharacter, Character: character}, true
 }
 
 func tildeKey(value uint32) (KeyCode, uint8, bool) {

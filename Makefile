@@ -1,4 +1,7 @@
-.PHONY: build check format format-check lint test unicode
+.PHONY: bench build check format format-check lint test unicode
+
+bench:
+	GOWORK=off GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkDecoderKittyKey$$' -benchmem -benchtime=1s -count=3 ./vt
 
 build:
 	GOWORK=off GOTOOLCHAIN=local go build ./...
