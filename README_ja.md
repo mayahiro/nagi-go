@@ -21,7 +21,7 @@ Application runtime、Surface、Widget、terminal session、CLI command lifecycl
 ## 導入
 
 ```sh
-go get github.com/mayahiro/nagi-go@v0.1.0
+go get github.com/mayahiro/nagi-go@latest
 ```
 
 Applicationが使用するpackageだけをimportします

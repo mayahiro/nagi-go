@@ -24,7 +24,7 @@ or CLI command lifecycle
 ## Installation
 
 ```sh
-go get github.com/mayahiro/nagi-go@v0.1.0
+go get github.com/mayahiro/nagi-go@latest
 ```
 
 Import only the packages an application uses
