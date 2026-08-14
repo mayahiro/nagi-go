@@ -25,3 +25,23 @@ func TestAppendEncodedPreservesDestinationPrefix(t *testing.T) {
 		t.Fatalf("AppendEncoded() = %q, want %q", got, want)
 	}
 }
+
+func TestOriginOnlyTranslatesAbsolutePositionsAndSaturates(t *testing.T) {
+	got := string(EncodeAt([]TerminalOp{
+		MoveTo(2, 3),
+		MoveRelative(1, -1),
+		MoveTo(^uint32(0), ^uint32(0)),
+	}, BaselineCapabilities(), 5, 7))
+	want := "\x1B[11;8H\x1B[1A\x1B[1C\x1B[4294967296;4294967296H"
+	if got != want {
+		t.Fatalf("EncodeAt() = %q, want %q", got, want)
+	}
+}
+
+func TestSetClipboardNormalizesInvalidUTF8AndEncodesControls(t *testing.T) {
+	got := string(Encode([]TerminalOp{SetClipboard("a\xFF\x1B日")}, BaselineCapabilities()))
+	want := "\x1B]52;c;Ye+/vRvml6U=\x1B\\"
+	if got != want {
+		t.Fatalf("Encode(SetClipboard) = %q, want %q", got, want)
+	}
+}

@@ -11,6 +11,21 @@ type Modifiers struct {
 	Control bool
 	// Meta indicates Meta when distinguished from Alt
 	Meta bool
+	// Super indicates the Windows, Linux, or Command modifier
+	Super bool
+	// Hyper indicates the Hyper modifier
+	Hyper bool
+	// CapsLock is the Caps Lock state reported by an extended protocol
+	CapsLock bool
+	// NumLock is the Num Lock state reported by an extended protocol
+	NumLock bool
+}
+
+// WithoutLocks returns shortcut modifiers without lock-key state
+func (m Modifiers) WithoutLocks() Modifiers {
+	m.CapsLock = false
+	m.NumLock = false
+	return m
 }
 
 // KeyCode identifies a normalized logical key
@@ -51,6 +66,8 @@ const (
 	KeyPageDown
 	// KeyFunction uses KeyEvent.Function
 	KeyFunction
+	// KeyFunctional uses KeyEvent.Functional for a protocol-defined functional key
+	KeyFunctional
 )
 
 // KeyAction is keyboard action information supplied by the input protocol
@@ -75,6 +92,8 @@ const (
 	KeyProtocolUnknown KeyProtocol = iota
 	// KeyProtocolLegacy is traditional C0, CSI, or SS3 input
 	KeyProtocolLegacy
+	// KeyProtocolKitty is Kitty keyboard protocol CSI input
+	KeyProtocolKitty
 )
 
 // KeyEvent is a normalized keyboard event
@@ -85,6 +104,8 @@ type KeyEvent struct {
 	Character rune
 	// Function is set when Code is KeyFunction
 	Function uint8
+	// Functional is set when Code is KeyFunctional
+	Functional uint32
 	// Modifiers contains supplied modifiers
 	Modifiers Modifiers
 	// Action contains supplied press, repeat, or release information

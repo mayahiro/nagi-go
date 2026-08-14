@@ -38,6 +38,20 @@ func TestEmptyTextHasNoGraphemeToOverride(t *testing.T) {
 	}
 }
 
+func TestASCIIWidthFastPathPreservesControlsAndCustomOverrides(t *testing.T) {
+	t.Parallel()
+
+	if got := Width("A\tB\x7f", ModernWidth()); got != 2 {
+		t.Fatalf("Width(ASCII controls) = %d, want 2", got)
+	}
+	profile := CustomWidth(ModernWidth(), func(grapheme string) (int, bool) {
+		return 2, grapheme == "A"
+	})
+	if got := Width("AB", profile); got != 3 {
+		t.Fatalf("Width(custom ASCII) = %d, want 3", got)
+	}
+}
+
 func TestCellOperationsDoNotSplitWideGraphemes(t *testing.T) {
 	t.Parallel()
 

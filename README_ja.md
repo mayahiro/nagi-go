@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-`github.com/mayahiro/nagi-go`はNagi terminal application向けに独立して再利用できるTextとVTの基盤を提供します。Module rootには意図的にpackageを置きません
+`github.com/mayahiro/nagi-go`はNagi terminal application向けに独立して再利用できるContent、Text、VTの基盤を提供します。Module rootには意図的にpackageを置きません
 
 ## 要件
 
@@ -12,6 +12,7 @@
 
 | Package | 責務 |
 | --- | --- |
+| [`content`](content) | Immutableなsource-neutral text構造、semantic projection、annotation、resource validation |
 | [`text`](text) | Unicode 17 grapheme segmentation、terminal Cell幅、wrap、truncate、byte／Cell位置変換 |
 | [`vt`](vt) | 純粋なtyped VT input decoderとoutput encoder、terminal capability、Color、Attributes、Style |
 
@@ -20,16 +21,18 @@ Application runtime、Surface、Widget、terminal session、CLI command lifecycl
 ## 導入
 
 ```sh
-go get github.com/mayahiro/nagi-go@v0.1.0
+go get github.com/mayahiro/nagi-go@latest
 ```
 
 Applicationが使用するpackageだけをimportします
 
 ## Example
 
-[TextとVTのexample](examples/text-and-vt/README.md)は両packageを1個の実行可能なprogramで使用します
+- [Source-neutral Content](examples/content/README.md)
+- [TextとVT](examples/text-and-vt/README.md)
 
 ```sh
+go run ./examples/content
 go run ./examples/text-and-vt
 ```
 

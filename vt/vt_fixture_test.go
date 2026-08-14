@@ -38,6 +38,32 @@ func TestInputFixturesAndEverySingleSplit(t *testing.T) {
 	}
 }
 
+func TestAmbiguousInputFollowsConfiguredProtocol(t *testing.T) {
+	records := vtRecords(t, "vt/input-protocol.txt", "vt-input-protocol", "protocol", "input", "expected")
+	for _, record := range records {
+		var kittyKeyboardMode bool
+		switch record.Field("protocol") {
+		case "legacy":
+		case "kitty":
+			kittyKeyboardMode = true
+		default:
+			t.Fatalf("case %s has unknown keyboard protocol", record.ID)
+		}
+		input := record.Bytes("input")
+		whole := decodeProtocolChunks([][]byte{input}, kittyKeyboardMode)
+		if got, want := canonicalEvents(whole), record.Field("expected"); got != want {
+			t.Errorf("case %s whole: events = %s, want %s", record.ID, got, want)
+		}
+
+		for split := 0; split <= len(input); split++ {
+			got := decodeProtocolChunks([][]byte{input[:split], input[split:]}, kittyKeyboardMode)
+			if !reflect.DeepEqual(got, whole) {
+				t.Errorf("case %s split %d differs: %#v, want %#v", record.ID, split, got, whole)
+			}
+		}
+	}
+}
+
 func TestOutputFixtures(t *testing.T) {
 	records := vtRecords(t, "vt/output.txt", "vt-output", "capabilities", "operations", "expected")
 	for _, record := range records {
@@ -47,6 +73,12 @@ func TestOutputFixtures(t *testing.T) {
 			capabilities = ModernCapabilities()
 		case "baseline":
 			capabilities = BaselineCapabilities()
+		case "ansi16":
+			capabilities = BaselineCapabilities()
+			capabilities.ColorLevel = ColorANSI16
+		case "monochrome":
+			capabilities = BaselineCapabilities()
+			capabilities.ColorLevel = ColorMonochrome
 		default:
 			t.Fatalf("case %s has unknown capabilities", record.ID)
 		}
@@ -54,6 +86,41 @@ func TestOutputFixtures(t *testing.T) {
 		want := record.Bytes("expected")
 		if !bytes.Equal(got, want) {
 			t.Errorf("case %s: Encode() = %q, want %q", record.ID, got, want)
+		}
+	}
+}
+
+func TestOutputOriginFixtures(t *testing.T) {
+	records := vtRecords(t, "vt/output-origin.txt", "vt-output-origin", "capabilities", "origin", "operations", "expected")
+	for _, record := range records {
+		var capabilities Capabilities
+		switch record.Field("capabilities") {
+		case "modern":
+			capabilities = ModernCapabilities()
+		case "baseline":
+			capabilities = BaselineCapabilities()
+		case "ansi16":
+			capabilities = BaselineCapabilities()
+			capabilities.ColorLevel = ColorANSI16
+		case "monochrome":
+			capabilities = BaselineCapabilities()
+			capabilities.ColorLevel = ColorMonochrome
+		default:
+			t.Fatalf("case %s has unknown capabilities", record.ID)
+		}
+		origin := strings.Split(record.Field("origin"), ",")
+		if len(origin) != 2 {
+			t.Fatalf("case %s has invalid origin", record.ID)
+		}
+		got := EncodeAt(
+			fixtureOperations(record.Field("operations")),
+			capabilities,
+			fixtureUnsigned(origin[0]),
+			fixtureUnsigned(origin[1]),
+		)
+		want := record.Bytes("expected")
+		if !bytes.Equal(got, want) {
+			t.Errorf("case %s: EncodeAt() = %q, want %q", record.ID, got, want)
 		}
 	}
 }
@@ -71,7 +138,12 @@ func vtRecords(t *testing.T, path, suite string, fields ...string) []conformance
 }
 
 func decodeChunks(chunks [][]byte) []Event {
+	return decodeProtocolChunks(chunks, false)
+}
+
+func decodeProtocolChunks(chunks [][]byte, kittyKeyboardMode bool) []Event {
 	decoder := NewDecoder()
+	decoder.SetKittyKeyboardMode(kittyKeyboardMode)
 	var events []Event
 	for _, chunk := range chunks {
 		events = append(events, decoder.Feed(chunk)...)
@@ -152,6 +224,8 @@ func keyCodeText(key KeyEvent) string {
 		return "page-down"
 	case KeyFunction:
 		return fmt.Sprintf("f%d", key.Function)
+	case KeyFunctional:
+		return fmt.Sprintf("functional-%d", key.Functional)
 	default:
 		return "unknown"
 	}
@@ -173,6 +247,9 @@ func keyActionText(action KeyAction) string {
 func keyProtocolText(protocol KeyProtocol) string {
 	if protocol == KeyProtocolLegacy {
 		return "legacy"
+	}
+	if protocol == KeyProtocolKitty {
+		return "kitty"
 	}
 	return "unknown"
 }
@@ -224,8 +301,20 @@ func modifierText(modifiers Modifiers) string {
 	if modifiers.Control {
 		names = append(names, "control")
 	}
+	if modifiers.Super {
+		names = append(names, "super")
+	}
+	if modifiers.Hyper {
+		names = append(names, "hyper")
+	}
 	if modifiers.Meta {
 		names = append(names, "meta")
+	}
+	if modifiers.CapsLock {
+		names = append(names, "caps-lock")
+	}
+	if modifiers.NumLock {
+		names = append(names, "num-lock")
 	}
 	if len(names) == 0 {
 		return "-"
@@ -254,6 +343,18 @@ func fixtureOperations(value string) []TerminalOp {
 			operations[index] = MoveTo(fixtureUnsigned(fields[1]), fixtureUnsigned(fields[2]))
 		case "move-relative":
 			operations[index] = MoveRelative(fixtureSigned(fields[1]), fixtureSigned(fields[2]))
+		case "request-cursor-position":
+			operations[index] = RequestCursorPosition()
+		case "request-primary-device-attributes":
+			operations[index] = RequestPrimaryDeviceAttributes()
+		case "query-keyboard-enhancements":
+			operations[index] = QueryKeyboardEnhancements()
+		case "push-keyboard-enhancements":
+			operations[index] = PushKeyboardEnhancements(NagiKeyboardEnhancements)
+		case "pop-keyboard-enhancements":
+			operations[index] = PopKeyboardEnhancements()
+		case "next-line":
+			operations[index] = NextLine()
 		case "set-style":
 			operations[index] = SetStyle(fixtureStyle(fields[1]))
 		case "reset-style":
@@ -286,6 +387,12 @@ func fixtureOperations(value string) []TerminalOp {
 			operations[index] = EnableFocus()
 		case "disable-focus":
 			operations[index] = DisableFocus()
+		case "set-clipboard":
+			if fields[1] == "-" {
+				operations[index] = SetClipboard("")
+			} else {
+				operations[index] = SetClipboard(fixtureScalarText(fields[1]))
+			}
 		case "begin-sync":
 			operations[index] = BeginSynchronizedUpdate()
 		case "end-sync":

@@ -41,6 +41,27 @@ func TestOversizedPasteIsBoundedAndRecovers(t *testing.T) {
 	if decoder.HasPending() {
 		t.Fatal("decoder remained pending after paste terminator")
 	}
+	if cap(decoder.sequence) > MaxSequenceBytes {
+		t.Fatalf("retained sequence capacity = %d", cap(decoder.sequence))
+	}
+}
+
+func TestKittyKeyWarmedAllocationsAreOwnedResultsOnly(t *testing.T) {
+	input := []byte("\x1B[97;2:1;65u")
+	decoder := NewDecoder()
+	if events := decoder.Feed(input); len(events) != 1 {
+		t.Fatalf("warm-up events = %#v", events)
+	}
+	var events []Event
+	allocations := testing.AllocsPerRun(1_000, func() {
+		events = decoder.Feed(input)
+	})
+	if len(events) != 1 || events[0].Kind != EventKey {
+		t.Fatalf("decoded events = %#v", events)
+	}
+	if allocations > 2 {
+		t.Fatalf("warmed Kitty key allocations = %f, want at most 2", allocations)
+	}
 }
 
 func TestEveryByteValueAndIncompleteSuffixIsNonPanicking(t *testing.T) {

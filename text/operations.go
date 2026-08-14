@@ -62,6 +62,22 @@ func (i *WrappedLines) Next() (WrappedLine, bool) {
 
 // Width returns the total terminal cell width of input
 func Width(input string, profile WidthProfile) int {
+	if profile.override == nil {
+		width := 0
+		for index := 0; index < len(input); index++ {
+			value := input[index]
+			if value >= 0x80 {
+				width = -1
+				break
+			}
+			if value >= 0x20 && value != 0x7f {
+				width++
+			}
+		}
+		if width >= 0 {
+			return width
+		}
+	}
 	iterator := IterateGraphemes(input)
 	total := 0
 	for grapheme, ok := iterator.Next(); ok; grapheme, ok = iterator.Next() {
